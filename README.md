@@ -19,7 +19,7 @@ The FFDS is composed of the following components:
 1. **Sensor Node**:
    - Temperature sensors, infrared cameras (AMG8833), and gas sensors (SCD30).
    - Local data processing and information transmission to the gateway.
-   - Data formatted in JSON compatible with the gateway.
+   - ~~Data formatted in JSON compatible with the gateway.~~
 
 2. **Gateway**:
    - Mediates communication between sensor nodes and the cloud.
