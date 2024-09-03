@@ -8,7 +8,7 @@
 #include "Arducam_Mega.h"
 
 //To avoid compilation error
-const size_t IMAGE_FRAGMENT_DATA_PACKET_SIZE = 255 - (sizeof(bool) * 2) - sizeof(size_t);
+const size_t IMAGE_FRAGMENT_DATA_SIZE = 255 - (sizeof(bool) * 2) - sizeof(size_t);
 
 // Structs
 struct AuthorizationPacket {
@@ -28,7 +28,7 @@ struct ImageFragmentDataPacket {
   bool start;
   bool end;
   size_t dataSize;
-  uint8_t data[IMAGE_FRAGMENT_DATA_PACKET_SIZE];
+  uint8_t data[IMAGE_FRAGMENT_DATA_SIZE];
 };
 
 // Pins
@@ -51,7 +51,8 @@ SX1280 radio = new Module(SX1281_CS, SX1281_RESET, SX1281_DIO1, SX1281_DIO2);  /
 SoftwareSerial GEO_SERIAL(GPS_RX_PIN, GPS_TX_PIN);  // SoftwareSerial for GPS
 
 // Network
-const int BUFFER_SIZE = IMAGE_FRAGMENT_DATA_PACKET_SIZE;          // Image buffer size
+const int IMAGE_FRAGMENT_DATA_PACKET_SIZE = 255;
+const int BUFFER_SIZE = IMAGE_FRAGMENT_DATA_SIZE;                 // Image buffer size
 const int DEVICE_ID = 0;                                          // Device ID
 const size_t AUTH_PACKET_SIZE = sizeof(AuthorizationPacket);      // Authorization Packet buffer size
 const size_t SIMPLE_DATA_PACKET_SIZE = sizeof(SimpleDataPacket);  // Simple Data Packet buffer size
@@ -151,13 +152,10 @@ void loop() {
         Serial.print("Simple data packet generated: ");
         printSimpleDataPacket(simpleDataPacket);
 
-        if (sendSimpleDataPacket(simpleDataPacket)) {
+        if (sendSimpleDataPacketBuffer()) {
 
           sendCameraData();
         }
-
-        // Reset authorization status
-        authorizationPacket->authorized = false;
 
       } else {
         Serial.println("Authorization failed or deviceID mismatch.");
@@ -250,8 +248,8 @@ void printImageFragmentDataPacket(const ImageFragmentDataPacket* imageFragmentDa
   Serial.println();
 }
 
-bool sendSimpleDataPacket(const SimpleDataPacket* simpleDataPacket) {
-  int state = radio.transmit(reinterpret_cast<uint8_t*>(simpleDataPacket), SIMPLE_DATA_PACKET_SIZE);
+bool sendSimpleDataPacketBuffer() {
+  int state = radio.transmit(simpleDataPacketBuffer, SIMPLE_DATA_PACKET_SIZE);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("Simple data packet successfully sent.");
     return true;
@@ -262,8 +260,8 @@ bool sendSimpleDataPacket(const SimpleDataPacket* simpleDataPacket) {
   }
 }
 
-bool sendImageFragmentDataPacket(const ImageFragmentDataPacket* imageFragmentDataPacket) {
-  int state = radio.transmit(reinterpret_cast<uint8_t*>(imageFragmentDataPacket), IMAGE_FRAGMENT_DATA_PACKET_SIZE);
+bool sendImageFragmentDataPacketBuffer() {
+  int state = radio.transmit(imageFragmentDataPacketBuffer, IMAGE_FRAGMENT_DATA_PACKET_SIZE);
   if (state == RADIOLIB_ERR_NONE) {
     Serial.println("Image fragment data packet successfully sent.");
     return true;
@@ -278,7 +276,7 @@ void sendCameraData() {
 
   ImageFragmentDataPacket* imageFragmentDataPacket = reinterpret_cast<ImageFragmentDataPacket*>(imageFragmentDataPacketBuffer);
 
-  Serial.println("Starting image capture.");
+  Serial.println("Starting image capture...");
   CAM.takePicture(CAM_IMAGE_MODE_QVGA, CAM_IMAGE_PIX_FMT_JPG);
 
   uint8_t imageData[BUFFER_SIZE] = { 0 };  // Buffer for image data
@@ -294,27 +292,6 @@ void sendCameraData() {
     imageDataCurrent = imageDataNext;
     imageDataNext = CAM.readByte();
 
-    if (headFlag == 1) {
-
-      imageData[i++] = imageDataNext;
-
-      if (i >= BUFFER_SIZE) {
-
-        Serial.println("Image buffer full. Sending data...");
-
-        imageFragmentDataPacket->start = start;
-        imageFragmentDataPacket->end = false;
-        imageFragmentDataPacket->dataSize = IMAGE_FRAGMENT_DATA_PACKET_SIZE;
-        memcpy(imageFragmentDataPacket->data, imageData, IMAGE_FRAGMENT_DATA_PACKET_SIZE);
-
-        printImageFragmentDataPacket(imageFragmentDataPacket);
-        sendImageFragmentDataPacket(imageFragmentDataPacket);
-
-        i = 0;
-        start = false;
-      }
-    }
-
     if (imageDataCurrent == 0xff && imageDataNext == 0xd8) {
 
       headFlag = 1;
@@ -323,22 +300,43 @@ void sendCameraData() {
       imageData[i++] = imageDataNext;
 
       start = true;
-    }
+    }else{
+      if (imageDataCurrent == 0xff && imageDataNext == 0xd9) {
 
-    if (imageDataCurrent == 0xff && imageDataNext == 0xd9) {
+        headFlag = 0;
 
-      headFlag = 0;
+        Serial.println("JPEG end of image detected. Sending data...");
 
-      Serial.println("JPEG end of image detected. Sending data...");
+        imageFragmentDataPacket->start = start;
+        imageFragmentDataPacket->end = true;
+        imageFragmentDataPacket->dataSize = IMAGE_FRAGMENT_DATA_SIZE;
+        memcpy(imageFragmentDataPacket->data, imageData, IMAGE_FRAGMENT_DATA_SIZE);
 
-      imageFragmentDataPacket->start = start;
-      imageFragmentDataPacket->end = true;
-      imageFragmentDataPacket->dataSize = IMAGE_FRAGMENT_DATA_PACKET_SIZE;
-      memcpy(imageFragmentDataPacket->data, imageData, IMAGE_FRAGMENT_DATA_PACKET_SIZE);
+        printImageFragmentDataPacket(imageFragmentDataPacket);
+        sendImageFragmentDataPacketBuffer();
+        break;
+      }else{
+        if (headFlag == 1) {
 
-      printImageFragmentDataPacket(imageFragmentDataPacket);
-      sendImageFragmentDataPacket(imageFragmentDataPacket);
-      break;
+          imageData[i++] = imageDataNext;
+
+          if (i >= BUFFER_SIZE) {
+
+            Serial.println("Image buffer full. Sending data...");
+
+            imageFragmentDataPacket->start = start;
+            imageFragmentDataPacket->end = false;
+            imageFragmentDataPacket->dataSize = IMAGE_FRAGMENT_DATA_SIZE;
+            memcpy(imageFragmentDataPacket->data, imageData, IMAGE_FRAGMENT_DATA_SIZE);
+
+            printImageFragmentDataPacket(imageFragmentDataPacket);
+            sendImageFragmentDataPacketBuffer();
+
+            i = 0;
+            start = false;
+          }
+        }
+      }
     }
   }
 }
